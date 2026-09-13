@@ -85,3 +85,24 @@ Configure these in GitHub → Settings:
   (after the tap PR) `brew install cigan1/tap/leafread`.
 - Check the crates.io page renders the README.
 - Announce in Discussions with the changelog summary.
+
+## Resuming a crates.io publish
+
+If the GitHub Release was created before `CARGO_REGISTRY_TOKEN` existed, the
+`publish-crate` job skips publishing. To publish that same version afterwards:
+
+```sh
+# 1. Create an API token at https://crates.io/settings/tokens with the
+#    `publish-update` scope for the `leafread` crate, then:
+gh secret set CARGO_REGISTRY_TOKEN --repo cigan1/leafread
+
+# 2. Re-run only the publish job of the release workflow:
+gh run rerun <run-id> --repo cigan1/leafread --job <publish-crate-job-id>
+```
+
+Alternatively publish from a local checkout of the tag:
+
+```sh
+git checkout vX.Y.Z
+cargo publish --locked    # after `cargo login`
+```
