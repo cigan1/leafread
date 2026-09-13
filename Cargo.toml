@@ -1,0 +1,39 @@
+[package]
+name = "leafread"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.86"
+description = "Read Markdown in your terminal: CommonMark + GFM, search, table of contents, syntax highlighting, and inline images."
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/cigan1/leafread"
+homepage = "https://github.com/cigan1/leafread"
+keywords = ["markdown", "terminal", "tui", "cli", "reader"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.6", features = ["derive"] }
+comrak = "0.55"
+image = { version = "0.25", default-features = false, features = [
+    "bmp",
+    "gif",
+    "jpeg",
+    "png",
+    "webp",
+] }
+notify = "8.2"
+open = "5.4"
+ratatui = "0.30"
+ratatui-image = { version = "11.0", default-features = false, features = [
+    "crossterm",
+    "image-defaults",
+] }
+syntect = { version = "5.3", default-features = false, features = [
+    "default-fancy",
+] }
+unicode-width = "0.2"
+
+[profile.release]
+lto = "thin"
+strip = true

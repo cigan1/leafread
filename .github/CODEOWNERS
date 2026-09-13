@@ -1,0 +1,14 @@
+# Every file is owned by the maintainer; sensitive paths are listed explicitly
+# so their changes are easy to spot in review.
+* @cigan1
+
+# Release and compliance automation
+/.github/ @cigan1
+/Cargo.toml @cigan1
+
+# Governance and policy
+/LICENSE-APACHE @cigan1
+/LICENSE-MIT @cigan1
+/MAINTAINERS.md @cigan1
+/SECURITY.md @cigan1
+/CODE_OF_CONDUCT.md @cigan1

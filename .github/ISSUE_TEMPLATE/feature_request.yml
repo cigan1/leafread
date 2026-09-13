@@ -1,0 +1,54 @@
+name: Feature request
+description: Suggest an improvement or new capability
+labels: ["enhancement", "needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Tell us about the problem first — the best features come from real
+        reading workflows.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      placeholder: "When I read long changelogs, I can't ..."
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: If you have one. How would you expect it to work in the terminal?
+    validations:
+      required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other tools or workarounds you tried
+    validations:
+      required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Rendering (Markdown features)
+        - Navigation / keybindings
+        - Search / table of contents / links
+        - Images
+        - Themes / colors
+        - Piped output / scripting
+        - Performance
+        - Other
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and discussions for this request
+          required: true
+        - label: This is about reading Markdown, not editing it
+          required: true

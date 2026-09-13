@@ -1,0 +1,52 @@
+name: OSS compliance
+
+# Note on known false positives in the vendored audit scripts (they are
+# warnings only, and this workflow fails only on blockers):
+#   * opensource_audit.py flags its own keyword list as "sensitive terms" when
+#     it scans the repository it lives in.
+#   * license_metadata_audit.py does not parse OR-combined SPDX expressions and
+#     warns about the valid `MIT OR Apache-2.0` in Cargo.toml.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oss-compliance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compliance:
+    name: OSS compliance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Required files and repository hygiene
+        run: python3 .github/scripts/opensource_audit.py .
+
+      - name: README quality
+        run: python3 .github/scripts/readme_audit.py . --fail-on blocker
+
+      - name: License and package metadata
+        run: python3 .github/scripts/license_metadata_audit.py . --fail-on blocker
+
+      - name: Workflow safety
+        run: python3 .github/scripts/workflow_audit.py . --fail-on blocker
+
+  dependency-policy:
+    name: Dependency policy (cargo-deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check licenses, advisories, and sources
+        uses: EmbarkStudios/cargo-deny-action@0484eedcba649433ebd03d9b7c9c002746bbc4b9 # v2.0.6
