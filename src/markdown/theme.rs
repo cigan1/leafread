@@ -28,6 +28,10 @@ pub struct Theme {
     pub footnote: Style,
     pub search_match: Style,
     pub search_current: Style,
+    /// The chunk (sentence) currently being read aloud.
+    pub narration_sentence: Style,
+    /// The word currently being read aloud.
+    pub narration_word: Style,
     pub toc_selected: Style,
     pub header_bar: Style,
     pub status_bar: Style,
@@ -117,6 +121,11 @@ impl Theme {
             footnote: Style::default().fg(rgb(140, 148, 175)),
             search_match: Style::default().fg(rgb(26, 27, 38)).bg(rgb(224, 175, 104)),
             search_current: Style::default().fg(rgb(26, 27, 38)).bg(rgb(247, 118, 142)),
+            narration_sentence: Style::default().bg(rgb(43, 48, 72)),
+            narration_word: Style::default()
+                .fg(rgb(26, 27, 38))
+                .bg(rgb(122, 162, 247))
+                .add_modifier(Modifier::BOLD),
             toc_selected: Style::default()
                 .fg(rgb(26, 27, 38))
                 .bg(rgb(122, 162, 247))
@@ -201,6 +210,11 @@ impl Theme {
             footnote: Style::default().fg(rgb(90, 90, 100)),
             search_match: Style::default().fg(rgb(255, 255, 255)).bg(rgb(180, 83, 9)),
             search_current: Style::default().fg(rgb(255, 255, 255)).bg(rgb(190, 40, 70)),
+            narration_sentence: Style::default().bg(rgb(228, 232, 248)),
+            narration_word: Style::default()
+                .fg(rgb(255, 255, 255))
+                .bg(rgb(52, 84, 209))
+                .add_modifier(Modifier::BOLD),
             toc_selected: Style::default()
                 .fg(rgb(255, 255, 255))
                 .bg(rgb(52, 84, 209))
@@ -243,6 +257,8 @@ impl Theme {
             footnote: d,
             search_match: inv,
             search_current: inv,
+            narration_sentence: d,
+            narration_word: Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD),
             toc_selected: inv,
             header_bar: Style::default().add_modifier(Modifier::REVERSED),
             status_bar: Style::default().add_modifier(Modifier::REVERSED),

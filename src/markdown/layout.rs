@@ -49,6 +49,23 @@ pub struct ImagePlacement {
     pub alt: String,
 }
 
+/// Where one run of a word sits on screen, in terminal columns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Segment {
+    pub line: usize,
+    pub start: usize,
+    pub end: usize,
+}
+
+/// A word from the prose, with every screen segment it occupies. Words are
+/// recorded in reading order, so the vector index is the word's position in
+/// the document; read-aloud uses these to highlight what is being spoken.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WordMark {
+    pub text: String,
+    pub segments: Vec<Segment>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Rendered {
     pub lines: Vec<Line<'static>>,
@@ -56,6 +73,7 @@ pub struct Rendered {
     pub links: Vec<LinkSpan>,
     pub images: Vec<ImagePlacement>,
     pub footnotes: Vec<(String, Vec<Block>)>,
+    pub words: Vec<WordMark>,
     pub title: Option<String>,
 }
 
@@ -98,6 +116,7 @@ struct Wrapper {
     started: bool,
     link: Option<String>,
     links: Vec<LinkSpan>,
+    words: Vec<WordMark>,
 }
 
 impl Wrapper {
@@ -123,6 +142,7 @@ impl Wrapper {
             started: false,
             link: None,
             links: Vec::new(),
+            words: Vec::new(),
         }
     }
 
@@ -224,9 +244,10 @@ impl Wrapper {
         }
         self.pending_space = false;
 
+        let mut segments = Vec::new();
         if self.col + word_width <= self.width {
             for span in &word {
-                self.emit(span.content.to_string(), span.style);
+                segments.push(self.emit(span.content.to_string(), span.style));
             }
         } else {
             // Word longer than the remaining space: hard-split by character.
@@ -237,15 +258,25 @@ impl Wrapper {
                         self.newline();
                         self.begin_line();
                     }
-                    self.emit(ch.to_string(), span.style);
+                    segments.push(self.emit(ch.to_string(), span.style));
                 }
             }
         }
+        let text: String = word.iter().map(|s| s.content.as_ref()).collect();
+        self.words.push(WordMark {
+            text,
+            segments: merge_segments(segments),
+        });
     }
 
-    fn emit(&mut self, text: String, style: Style) {
+    fn emit(&mut self, text: String, style: Style) -> Segment {
         let width = UnicodeWidthStr::width(text.as_str());
         self.begin_line();
+        let segment = Segment {
+            line: self.lines.len(),
+            start: self.col,
+            end: self.col + width,
+        };
         if let Some(url) = &self.link {
             let line = self.lines.len();
             let start = self.col;
@@ -269,15 +300,30 @@ impl Wrapper {
         }
         self.current.push(Span::styled(text, style));
         self.col += width;
+        segment
     }
 
-    fn finish(mut self) -> (Vec<Line<'static>>, Vec<LinkSpan>) {
+    fn finish(mut self) -> (Vec<Line<'static>>, Vec<LinkSpan>, Vec<WordMark>) {
         self.flush_word();
         if !self.current.is_empty() || self.lines.is_empty() {
             self.newline();
         }
-        (self.lines, self.links)
+        (self.lines, self.links, self.words)
     }
+}
+
+/// Join consecutive segments on the same line into one span.
+fn merge_segments(segments: Vec<Segment>) -> Vec<Segment> {
+    let mut out: Vec<Segment> = Vec::with_capacity(segments.len());
+    for segment in segments {
+        match out.last_mut() {
+            Some(last) if last.line == segment.line && last.end == segment.start => {
+                last.end = segment.end;
+            }
+            _ => out.push(segment),
+        }
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -294,6 +340,7 @@ struct Builder<'a> {
     links: Vec<LinkSpan>,
     images: Vec<ImagePlacement>,
     footnotes: Vec<(String, Vec<Block>)>,
+    words: Vec<WordMark>,
     title: Option<String>,
 }
 
@@ -309,6 +356,7 @@ impl<'a> Builder<'a> {
             links: Vec::new(),
             images: Vec::new(),
             footnotes: Vec::new(),
+            words: Vec::new(),
             title: None,
         }
     }
@@ -324,6 +372,7 @@ impl<'a> Builder<'a> {
             links: Vec::new(),
             images: Vec::new(),
             footnotes: Vec::new(),
+            words: Vec::new(),
             title: None,
         };
         builder.render_blocks(blocks, depth);
@@ -347,6 +396,7 @@ impl<'a> Builder<'a> {
             links: self.links,
             images: self.images,
             footnotes: self.footnotes,
+            words: self.words,
             title: self.title,
         }
     }
@@ -385,12 +435,23 @@ impl<'a> Builder<'a> {
         }
     }
 
-    fn push_lines(&mut self, lines: Vec<Line<'static>>, links: Vec<LinkSpan>) {
+    fn push_lines(
+        &mut self,
+        lines: Vec<Line<'static>>,
+        links: Vec<LinkSpan>,
+        words: Vec<WordMark>,
+    ) {
         let base = self.out.len();
         self.out.extend(lines);
         for mut link in links {
             link.line += base;
             self.links.push(link);
+        }
+        for mut word in words {
+            for segment in &mut word.segments {
+                segment.line += base;
+            }
+            self.words.push(word);
         }
     }
 
@@ -454,6 +515,19 @@ impl<'a> Builder<'a> {
         for mut image in sub.images {
             image.line += base;
             self.images.push(image);
+        }
+        for mut word in sub.words {
+            for segment in &mut word.segments {
+                let offset = if segment.line == 0 {
+                    first_width
+                } else {
+                    cont_width
+                };
+                segment.line += base;
+                segment.start += offset;
+                segment.end += offset;
+            }
+            self.words.push(word);
         }
         self.footnotes.extend(sub.footnotes);
     }
@@ -541,8 +615,8 @@ impl<'a> Builder<'a> {
         let style = self.theme.heading[level - 1];
         let mut wrapper = Wrapper::new(self.width, Vec::new(), Vec::new());
         push_inlines(&mut wrapper, inlines, style, self.theme);
-        let (lines, links) = wrapper.finish();
-        self.push_lines(lines, links);
+        let (lines, links, words) = wrapper.finish();
+        self.push_lines(lines, links, words);
         if level <= 2 && self.theme.heading_underline && self.width > 4 {
             let ch = if level == 1 { '━' } else { '─' };
             let len = self.width.min(if level == 1 { 60 } else { 48 });
@@ -561,8 +635,8 @@ impl<'a> Builder<'a> {
         self.ensure_blank_before();
         let mut wrapper = Wrapper::new(self.width, Vec::new(), Vec::new());
         push_inlines(&mut wrapper, inlines, self.theme.text, self.theme);
-        let (lines, links) = wrapper.finish();
-        self.push_lines(lines, links);
+        let (lines, links, words) = wrapper.finish();
+        self.push_lines(lines, links, words);
         self.push_blank();
     }
 
@@ -842,7 +916,7 @@ impl<'a> Builder<'a> {
             let width = widths.get(i).copied().unwrap_or(3);
             let mut wrapper = Wrapper::new(width, Vec::new(), Vec::new());
             push_inlines(&mut wrapper, cell, self.theme.text, self.theme);
-            let (mut lines, _) = wrapper.finish();
+            let (mut lines, _, _) = wrapper.finish();
             if lines.is_empty() {
                 lines.push(Line::default());
             }
@@ -895,8 +969,8 @@ impl<'a> Builder<'a> {
                 self.theme.text.add_modifier(Modifier::BOLD),
                 self.theme,
             );
-            let (lines, links) = wrapper.finish();
-            self.push_lines(lines, links);
+            let (lines, links, words) = wrapper.finish();
+            self.push_lines(lines, links, words);
             let sub = self.sub(details, self.width.saturating_sub(2), depth + 1);
             let prefix = vec![Span::styled("  ", self.theme.text)];
             self.append_prefixed(sub, prefix.clone(), prefix, None);
@@ -941,8 +1015,8 @@ impl<'a> Builder<'a> {
             }
             let mut wrapper = Wrapper::new(self.width, Vec::new(), Vec::new());
             wrapper.push_text(text, self.theme.dim);
-            let (lines, links) = wrapper.finish();
-            self.push_lines(lines, links);
+            let (lines, links, words) = wrapper.finish();
+            self.push_lines(lines, links, words);
         }
         self.push_blank();
     }
@@ -1157,6 +1231,63 @@ mod tests {
         assert_eq!(rendered.links.len(), 1);
         assert_eq!(rendered.links[0].url, "https://example.com");
         assert!(rendered.links[0].text.contains("the docs"));
+    }
+
+    #[test]
+    fn records_word_marks_in_reading_order() {
+        let rendered = render_text("# Title\n\nHello *brave* world.\n", 40);
+        let words: Vec<&str> = rendered.words.iter().map(|w| w.text.as_str()).collect();
+        assert_eq!(words, ["Title", "Hello", "brave", "world."]);
+        assert_word_marks(&rendered);
+    }
+
+    #[test]
+    fn word_marks_shift_through_containers() {
+        let rendered = render_text("> quoted text\n\n- item one\n", 40);
+        let words: Vec<&str> = rendered.words.iter().map(|w| w.text.as_str()).collect();
+        assert_eq!(words, ["quoted", "text", "item", "one"]);
+        assert_word_marks(&rendered);
+        assert_eq!(rendered.words[0].segments[0].start, 2);
+        assert_eq!(rendered.words[2].segments[0].start, 2);
+    }
+
+    #[test]
+    fn long_words_record_every_screen_segment() {
+        let rendered = render_text("supercalifragilisticexpialidocious", 10);
+        assert_eq!(rendered.words.len(), 1);
+        assert!(rendered.words[0].segments.len() > 1);
+        assert_word_marks(&rendered);
+    }
+
+    #[test]
+    fn tables_and_code_are_not_narrated() {
+        let rendered = render_text("```\nfn main() {}\n```\n", 40);
+        assert!(rendered.words.is_empty(), "{:?}", rendered.words);
+        let rendered = render_text("| a | b |\n|---|---|\n| 1 | 2 |\n", 40);
+        assert!(rendered.words.is_empty(), "{:?}", rendered.words);
+    }
+
+    /// Every recorded segment must point at exactly the word text on screen.
+    fn assert_word_marks(rendered: &Rendered) {
+        for word in &rendered.words {
+            let mut joined = String::new();
+            for segment in &word.segments {
+                let line: String = rendered.lines[segment.line]
+                    .spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect();
+                let chars: Vec<char> = line.chars().collect();
+                let slice: String = chars[segment.start..segment.end].iter().collect();
+                joined.push_str(&slice);
+            }
+            assert_eq!(
+                joined,
+                word.text,
+                "segments {word:?} in {:?}",
+                text(rendered)
+            );
+        }
     }
 
     #[test]

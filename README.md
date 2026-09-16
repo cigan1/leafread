@@ -71,6 +71,9 @@ binaries, Homebrew, and the full option list are below.
   relative links to other Markdown files open in place
 - **Directory browser**: run it with no arguments to pick a file
 - **Live reload**: `w` (or `--watch`) re-renders when the file changes on disk
+- **Read aloud**: `p` speaks the page from where you are reading, highlighting
+  each word as it is voiced, with the view following along (`]`/`[` skip a
+  sentence, `s` stops; `--read` starts immediately)
 - **Themes**: `dark`, `light`, `mono` (modifiers only), `NO_COLOR` respected
 
 [ratatui-image]: https://github.com/ratatui/ratatui-image
@@ -139,6 +142,9 @@ leafread --no-tui notes.md | less -R
 | `w` | Toggle live reload |
 | `r` | Reload now |
 | `m` | Toggle front matter |
+| `p` | Read aloud from here; pause / resume while reading |
+| `]` / `[` | Skip a sentence forward / back while reading |
+| `s` | Stop reading aloud |
 | `?` | Help overlay |
 | `q` | Quit |
 
@@ -157,9 +163,38 @@ leafread [OPTIONS] [PATH]
       --no-hyperlinks  Do not emit OSC 8 clickable links
   -W, --watch          Reload the document when the file changes
       --front-matter   Show YAML front matter instead of hiding it
+      --read           Start reading aloud when the viewer opens
+      --tts <ENGINE>   Speech engine: auto (default), gemini, say, espeak
+      --voice <NAME>   Voice (default: Leda for gemini, system voice for say)
+      --tts-style <T>  Delivery instruction for Gemini, e.g. "slower and calmer"
   -h, --help           Print help
   -V, --version        Print version
 ```
+
+## Read aloud
+
+Press `p` in the reader to hear the document from the top of your view onwards:
+the word being spoken is highlighted, the rest of the spoken sentence is
+tinted, and the view scrolls to follow. `p` pauses and resumes, `]` and `[` step
+a sentence forward or back (also while paused, where the highlight moves but the
+voice waits), and `s` (or `Esc`) stops. `leafread --read notes.md` starts reading
+as soon as the viewer opens.
+
+Speech comes from **Gemini TTS** (voice `Leda` by default) when an API key is
+available — `GEMINI_API_KEY`, `GOOGLE_API_KEY`, or a key file at
+`~/.ssh/gemini_key` or `~/.config/gemini/key`. Without a key it falls back to
+the local system voice: macOS `say`, or `espeak-ng` on Linux (plus `curl` for
+the Gemini backend and an audio player such as `afplay`, `paplay`, `aplay`, or
+`ffplay`). Choose explicitly with `--tts gemini|say|espeak`, and change the
+voice with `--voice` (Gemini voices include `Leda` — the default — `Aoede`,
+`Sulafat`, `Achernar`, `Callirrhoe`, and `Kore`).
+
+The page is spoken in short chunks that close at sentence boundaries, then
+synthesized in the background while the first chunk plays. TTS engines report
+no word timings, so within a chunk each word's duration is estimated from its
+length; every new chunk resynchronizes the highlight with the voice. Code
+blocks, tables, diagrams, and math are skipped, and narration stops with a
+status message if the document changes under it.
 
 ## Markdown support
 

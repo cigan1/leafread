@@ -6,6 +6,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 use ratatui_image::StatefulImage;
+use unicode_width::UnicodeWidthChar;
 
 use crate::markdown::layout::ImagePlacement;
 use crate::tui::app::{App, Mode, line_text};
@@ -110,38 +111,44 @@ impl App {
     fn highlight_line(&self, line: &Line<'static>, line_index: usize) -> Line<'static> {
         let query = self.search.query.to_lowercase();
         let current_match_line = self.search.matches.get(self.search.current).copied();
-        if query.is_empty() {
-            let mut line = line.clone();
-            if let Some(selected) = self.link_selected
-                && let Some(link) = self.rendered.links.get(selected)
-                && link.line == line_index
-            {
-                line = line.style(Style::default().add_modifier(Modifier::REVERSED));
-            }
-            return line;
+        let narration = self
+            .narration
+            .marks_for_line(&self.rendered.words, line_index);
+        let link_selected = self.link_selected.is_some_and(|selected| {
+            self.rendered
+                .links
+                .get(selected)
+                .is_some_and(|link| link.line == line_index)
+        });
+        if query.is_empty() && narration.is_none() && !link_selected {
+            return line.clone();
         }
         let text = line_text(line);
         let lower = text.to_lowercase();
         let mut match_ranges: Vec<(usize, usize)> = Vec::new();
-        let mut from = 0;
-        while let Some(position) = lower[from..].find(&query) {
-            let start = from + position;
-            let end = start + query.len();
-            match_ranges.push((start, end));
-            from = end.max(start + 1);
+        if !query.is_empty() {
+            let mut from = 0;
+            while let Some(position) = lower[from..].find(&query) {
+                let start = from + position;
+                let end = start + query.len();
+                match_ranges.push((start, end));
+                from = end.max(start + 1);
+            }
         }
         let is_current = current_match_line == Some(line_index);
         let base_style = line.style;
-        let mut flat: Vec<(char, Style)> = Vec::new();
+        let mut flat: Vec<(char, Style, usize)> = Vec::new();
+        let mut column = 0usize;
         for span in &line.spans {
             let style = base_style.patch(span.style);
             for ch in span.content.chars() {
-                flat.push((ch, style));
+                flat.push((ch, style, column));
+                column += UnicodeWidthChar::width(ch).unwrap_or(0);
             }
         }
         let mut byte_offsets = Vec::with_capacity(flat.len() + 1);
         let mut byte = 0usize;
-        for (ch, _) in &flat {
+        for (ch, _, _) in &flat {
             byte_offsets.push(byte);
             byte += ch.len_utf8();
         }
@@ -152,17 +159,40 @@ impl App {
             self.theme.search_match
         };
         let mut spans: Vec<Span<'static>> = Vec::new();
-        for (index, (ch, style)) in flat.iter().enumerate() {
-            let start_byte = byte_offsets[index];
-            let end_byte = byte_offsets[index + 1];
-            let in_match = match_ranges
-                .iter()
-                .any(|(s, e)| start_byte >= *s && end_byte <= *e);
-            let style = if in_match {
-                style.patch(highlight)
+        for (index, (ch, style, column)) in flat.iter().enumerate() {
+            let mut style = *style;
+            let width = UnicodeWidthChar::width(*ch).unwrap_or(0);
+            if let Some(marks) = &narration {
+                if overlaps(&marks.sentence, *column, width) {
+                    style = style.patch(self.theme.narration_sentence);
+                }
+                if link_selected {
+                    style = style.add_modifier(Modifier::REVERSED);
+                }
+                let start_byte = byte_offsets[index];
+                let end_byte = byte_offsets[index + 1];
+                if match_ranges
+                    .iter()
+                    .any(|(s, e)| start_byte >= *s && end_byte <= *e)
+                {
+                    style = style.patch(highlight);
+                }
+                if overlaps(&marks.word, *column, width) {
+                    style = style.patch(self.theme.narration_word);
+                }
             } else {
-                *style
-            };
+                let start_byte = byte_offsets[index];
+                let end_byte = byte_offsets[index + 1];
+                let in_match = match_ranges
+                    .iter()
+                    .any(|(s, e)| start_byte >= *s && end_byte <= *e);
+                if in_match {
+                    style = style.patch(highlight);
+                }
+                if link_selected {
+                    style = style.add_modifier(Modifier::REVERSED);
+                }
+            }
             match spans.last_mut() {
                 Some(last) if last.style == style => last.content.to_mut().push(*ch),
                 _ => spans.push(Span::styled(ch.to_string(), style)),
@@ -225,11 +255,14 @@ impl App {
             ),
             _ => match self.status_message() {
                 Some(message) => (message.to_string(), self.theme.status_bar),
-                None => (
-                    "q quit  / search  n/N next  t toc  l links  tab links  f files  w watch  ? help"
-                        .to_string(),
-                    self.theme.help_bar,
-                ),
+                None => match self.narration.status() {
+                    Some(status) => (status, self.theme.status_bar),
+                    None => (
+                        "q quit  / search  n/N next  t toc  l links  tab links  f files  p read  ? help"
+                            .to_string(),
+                        self.theme.help_bar,
+                    ),
+                },
             },
         };
         let position = format!(
@@ -329,6 +362,9 @@ impl App {
             ("w", "toggle live reload"),
             ("r", "reload file"),
             ("m", "toggle front matter"),
+            ("p", "read aloud / pause / resume"),
+            ("] / [", "next / previous sentence"),
+            ("s", "stop reading"),
             ("q", "quit"),
         ];
         let mut lines = Vec::new();
@@ -403,6 +439,14 @@ impl App {
     }
 }
 
+/// Whether a character occupying `column..column + width` intersects any of
+/// the marked ranges.
+fn overlaps(ranges: &[(usize, usize)], column: usize, width: usize) -> bool {
+    ranges
+        .iter()
+        .any(|(start, end)| column < *end && column + width.max(1) > *start)
+}
+
 fn centered(area: Rect, percent_x: u16, percent_y: u16) -> Rect {
     let width = area.width * percent_x / 100;
     let height = area.height * percent_y / 100;
@@ -420,5 +464,65 @@ fn inset(area: Rect, x: u16, y: u16) -> Rect {
         y: area.y + y,
         width: area.width.saturating_sub(x * 2),
         height: area.height.saturating_sub(y * 2),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::markdown::theme::Theme;
+    use crate::narration;
+    use crate::tui::app::Initial;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    fn app_with(source: &str) -> App {
+        let initial = Initial {
+            path: None,
+            raw: source.to_string(),
+            directory: None,
+        };
+        let mut app = App::new(
+            initial,
+            Theme::dark(),
+            None,
+            false,
+            narration::Config::default(),
+        );
+        app.width = 40;
+        app.height = 10;
+        app.relayout();
+        app
+    }
+
+    #[test]
+    fn draw_paints_the_spoken_word_and_its_sentence() {
+        let mut app = app_with("# Title\n\nhello world\n");
+        let spoken_line = app.rendered.words[1].segments[0].line;
+        let title_line = app.rendered.words[0].segments[0].line;
+        let other_line = app.rendered.words[2].segments[0].line;
+        let word_bg = Theme::dark().narration_word.bg.expect("word has a bg");
+        let sentence_bg = Theme::dark()
+            .narration_sentence
+            .bg
+            .expect("sentence has a bg");
+        app.narration.debug_state(vec![0, 1, 2], vec![0], 0..2, 1);
+
+        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+
+        let word = buffer.cell((1, 1 + spoken_line as u16)).unwrap();
+        assert_eq!(word.bg, word_bg, "the spoken word is highlighted");
+        let title = buffer.cell((1, 1 + title_line as u16)).unwrap();
+        assert_eq!(
+            title.bg, sentence_bg,
+            "words in the current chunk are tinted"
+        );
+        let other = buffer.cell((1, 1 + other_line as u16)).unwrap();
+        assert_ne!(
+            other.bg, sentence_bg,
+            "words outside the chunk are left alone"
+        );
     }
 }

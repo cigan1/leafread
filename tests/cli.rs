@@ -105,6 +105,35 @@ fn help_lists_key_options() {
     assert!(stdout.contains("--theme"), "{stdout}");
     assert!(stdout.contains("--watch"), "{stdout}");
     assert!(stdout.contains("--no-tui"), "{stdout}");
+    assert!(stdout.contains("--read"), "{stdout}");
+    assert!(stdout.contains("--tts"), "{stdout}");
+    assert!(!stdout.contains("--probe-terminal"), "{stdout}");
+}
+
+#[test]
+fn terminal_probe_answers_no_without_a_terminal() {
+    let reply = std::env::temp_dir().join(format!("leafread-probe-{}.reply", std::process::id()));
+    let _ = std::fs::remove_file(&reply);
+    let output = binary()
+        .args(["--probe-terminal", reply.to_str().unwrap()])
+        .stdin(Stdio::null())
+        .output()
+        .expect("run leafread");
+    assert!(output.status.success());
+    let answer = std::fs::read_to_string(&reply).expect("probe reply");
+    assert_eq!(answer, "no");
+    std::fs::remove_file(&reply).expect("remove probe reply");
+}
+
+#[test]
+fn unknown_tts_engine_is_rejected() {
+    let output = binary()
+        .args(["--no-tui", "--tts", "festival", &fixture("kitchen-sink.md")])
+        .output()
+        .expect("run leafread");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("unknown TTS engine"), "{stderr}");
 }
 
 #[test]

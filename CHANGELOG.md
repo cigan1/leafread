@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Read aloud (`p`, `s`, `--read`): speaks the document with the word being
+  voiced highlighted and the view following along. Speaks from the current
+  scroll position. `]` and `[` skip a sentence forward or back, while reading or
+  paused. Backends: Gemini TTS (voice `Leda` by default, API key from
+  `GEMINI_API_KEY`/`GOOGLE_API_KEY` or `~/.ssh/gemini_key`) with local `say`
+  (macOS) or `espeak-ng` (Linux) fallbacks; `--tts`, `--voice`, and
+  `--tts-style` configure them. Speech is synthesized in sentence-sized chunks
+  so the voice keeps its natural intonation; code blocks, tables, diagrams,
+  and math are skipped. Pressing `p` again pauses and resumes, `s` or `Esc`
+  stops, and `--read` starts reading as soon as the viewer opens.
+
+### Fixed
+
+- Read aloud: pausing and resuming now continues from the paused word instead
+  of failing with "speech synthesis stopped unexpectedly".
+- Speech and playback subprocesses no longer inherit the reader's stdin, so a
+  `say`/`afplay`/`curl` child can never swallow a keystroke.
+- The image capability query no longer runs on terminals that do not answer
+  it; `ratatui-image`'s query thread keeps reading stdin in the background
+  there and randomly ate keystrokes until it won a read race. The terminal is
+  now asked from a child process, so a terminal that answers opens the viewer
+  immediately instead of hanging behind a reply that crossterm cannot parse,
+  and a terminal that never answers is answered by killing the child.
+- Reloading a file while it is being read aloud now says the narration stopped
+  instead of only reporting the reload.
+- The graphics capability query no longer prints its payload on terminals that
+  do not implement it, where the kitty query was echoed as text on the screen
+  behind the viewer and stayed there after quitting; it is only sent to
+  terminals known to answer it (kitty, Ghostty) and the rest still report
+  sixel, font size, and iTerm2 support.
+- The query can no longer leave the terminal in line-buffered mode: its thread
+  switches raw mode off when it finishes, which raced the viewer's own raw-mode
+  setup and made the first keystroke look lost.
+
 ## [0.1.0] - 2026-09-13
 
 Initial release.
