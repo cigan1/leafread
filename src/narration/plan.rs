@@ -9,10 +9,14 @@ use std::ops::Range;
 
 use crate::markdown::layout::WordMark;
 
-/// Maximum characters per synthesized chunk. Chunks close at sentence
-/// punctuation whenever one falls inside the window, which keeps the highlight
-/// from drifting far from the voice.
-pub const MAX_CHUNK_CHARS: usize = 140;
+/// Hard cap on characters per synthesized chunk. Chunks close at sentence
+/// punctuation so the voice keeps whole-sentence intonation; the cap only
+/// breaks up sentences too long to be spoken in one piece.
+pub const MAX_CHUNK_CHARS: usize = 220;
+
+/// Chunks shorter than this keep accumulating sentences, so one-word
+/// headings and terse list items do not become choppy little clips.
+const MIN_CHUNK_CHARS: usize = 60;
 
 /// A word as it will be spoken, pointing back at its mark in `Rendered::words`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,6 +46,9 @@ pub struct Plan {
 impl Plan {
     /// Collect speakable words from `marks` (skipping drawing-only tokens such
     /// as image icons) and group them into chunks of at most `max_chars`.
+    /// A chunk closes at a sentence end as soon as it holds `MIN_CHUNK_CHARS`,
+    /// so most chunks are exactly one sentence and the voice keeps its natural
+    /// intonation; sentences longer than the cap are split at a word boundary.
     pub fn build(marks: &[WordMark], from: usize, max_chars: usize) -> Plan {
         let max_chars = max_chars.max(16);
         let words: Vec<PlannedWord> = marks
@@ -55,6 +62,7 @@ impl Plan {
             })
             .collect();
 
+        let min_chars = MIN_CHUNK_CHARS.min(max_chars / 2);
         let mut chunks = Vec::new();
         let mut start = 0;
         while start < words.len() {
@@ -70,6 +78,9 @@ impl Plan {
                 end += 1;
                 if ends_sentence(&words[end - 1].text) {
                     last_break = Some(end);
+                    if len >= min_chars {
+                        break;
+                    }
                 }
             }
             let close = match last_break {
@@ -191,6 +202,47 @@ mod tests {
                 }],
             })
             .collect()
+    }
+
+    #[test]
+    fn long_sentences_stay_whole() {
+        let sentence = "A sentence that is fairly long but still short enough to be \
+spoken as one natural piece of audio without cutting it in half.";
+        assert!(sentence.len() > 100 && sentence.len() < MAX_CHUNK_CHARS);
+        let words: Vec<&str> = sentence.split(' ').collect();
+        let plan = Plan::build(&marks(&words), 0, MAX_CHUNK_CHARS);
+        assert_eq!(plan.chunks.len(), 1, "{:?}", plan.chunks);
+    }
+
+    #[test]
+    fn separate_sentences_become_separate_chunks() {
+        let first = "The first sentence is long enough to stand on its own as a chunk.";
+        let second = "And this second sentence becomes the next chunk right after it.";
+        let plan = Plan::build(&marks(&[first, second]), 0, MAX_CHUNK_CHARS);
+        assert_eq!(plan.chunks.len(), 2);
+        assert_eq!(plan.chunks[0].text, first);
+        assert_eq!(plan.chunks[1].text, second);
+    }
+
+    #[test]
+    fn short_sentences_merge() {
+        let plan = Plan::build(&marks(&["Hi.", "Ok.", "Sure."]), 0, MAX_CHUNK_CHARS);
+        assert_eq!(plan.chunks.len(), 1);
+        assert_eq!(plan.chunks[0].text, "Hi. Ok. Sure.");
+    }
+
+    #[test]
+    fn sentences_longer_than_the_cap_split_at_word_boundaries() {
+        let words = vec!["alpha"; 80];
+        let plan = Plan::build(&marks(&words), 0, MAX_CHUNK_CHARS);
+        assert!(plan.chunks.len() > 1);
+        for chunk in &plan.chunks {
+            assert!(
+                chunk.text.chars().count() <= MAX_CHUNK_CHARS + 1,
+                "{}",
+                chunk.text
+            );
+        }
     }
 
     #[test]

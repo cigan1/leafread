@@ -150,7 +150,9 @@ impl App {
             .saturating_sub(self.viewport_height())
     }
 
-    pub fn relayout(&mut self) {
+    /// Re-render at the current width. Returns true when a running narration
+    /// had to stop because the document text changed under it.
+    pub fn relayout(&mut self) -> bool {
         let options = LayoutOptions {
             width: self.content_width(),
             theme: &self.theme,
@@ -177,7 +179,9 @@ impl App {
         if self.narration.active() && !self.narration.matches(&self.rendered.words) {
             self.narration.stop();
             self.set_status("read aloud stopped (document changed)".into());
+            return true;
         }
+        false
     }
 
     fn clamp_scroll(&mut self) {
@@ -261,10 +265,14 @@ impl App {
         };
         self.raw = raw;
         self.doc = parser::parse(&self.raw);
-        self.relayout();
+        let stopped_reading = self.relayout();
         self.scroll = (fraction * self.max_scroll() as f64).round() as usize;
         self.clamp_scroll();
-        self.set_status("reloaded (file changed)".to_string());
+        self.set_status(if stopped_reading {
+            "reloaded (read aloud stopped)".to_string()
+        } else {
+            "reloaded (file changed)".to_string()
+        });
     }
 
     pub fn set_status(&mut self, message: String) {
@@ -281,10 +289,9 @@ impl App {
             .narration
             .start(&self.rendered.words, self.scroll, &self.narration_config)
         {
-            Ok(()) => self.set_status(format!(
-                "reading aloud ({}) — p pause, s stop",
-                self.narration.engine_label()
-            )),
+            // The status bar shows the narration state itself, including the
+            // engine while speech is being prepared — no transient message.
+            Ok(()) => {}
             Err(message) => self.set_status(message),
         }
     }
@@ -486,6 +493,16 @@ impl App {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) {
+        if let Some(path) = std::env::var_os("LEAFREAD_KEYLOG") {
+            use std::io::Write as _;
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+            {
+                let _ = writeln!(f, "{:?} {:?}", key.code, key.modifiers);
+            }
+        }
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             self.quit = true;
             return;

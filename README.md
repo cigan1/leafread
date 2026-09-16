@@ -183,7 +183,8 @@ available — `GEMINI_API_KEY`, `GOOGLE_API_KEY`, or a key file at
 the local system voice: macOS `say`, or `espeak-ng` on Linux (plus `curl` for
 the Gemini backend and an audio player such as `afplay`, `paplay`, `aplay`, or
 `ffplay`). Choose explicitly with `--tts gemini|say|espeak`, and change the
-voice with `--voice` (Gemini voices include `Leda`, `Aoede`, `Sulafat`).
+voice with `--voice` (Gemini voices include `Leda` — the default — `Aoede`,
+`Sulafat`, `Achernar`, `Callirrhoe`, and `Kore`).
 
 The page is spoken in short chunks that close at sentence boundaries, then
 synthesized in the background while the first chunk plays. TTS engines report

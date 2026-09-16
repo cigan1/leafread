@@ -231,6 +231,7 @@ fn gemini(
             .arg(format!("@{}", payload.display()))
             .arg("--output")
             .arg(&response)
+            .stdin(Stdio::null())
             .output()
             .map_err(|err| format!("cannot run curl: {err}"))?;
         if output.status.success() {
@@ -295,6 +296,7 @@ fn say(text: &str, voice: Option<&str>, dir: &Path, seq: usize) -> Result<Pcm, S
         command.arg(format!("--voice={voice}"));
     }
     let output = command
+        .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .output()
@@ -324,6 +326,7 @@ fn espeak(text: &str, voice: Option<&str>, dir: &Path, seq: usize) -> Result<Pcm
     }
     command.arg("-f").arg(&text_file);
     let output = command
+        .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .output()
@@ -371,6 +374,7 @@ pub fn play(file: &Path) -> Result<Child, String> {
         let script = format!("(New-Object Media.SoundPlayer '{quoted}').PlaySync()");
         return Command::new(program)
             .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
@@ -382,6 +386,7 @@ pub fn play(file: &Path) -> Result<Child, String> {
     command.args(args);
     command.arg(file);
     command
+        .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()

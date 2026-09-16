@@ -14,9 +14,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scroll position. Backends: Gemini TTS (voice `Leda` by default, API key from
   `GEMINI_API_KEY`/`GOOGLE_API_KEY` or `~/.ssh/gemini_key`) with local `say`
   (macOS) or `espeak-ng` (Linux) fallbacks; `--tts`, `--voice`, and
-  `--tts-style` configure them. Speech is synthesized in short chunks, so the
-  highlight resynchronizes on every sentence; code blocks, tables, diagrams,
-  and math are skipped.
+  `--tts-style` configure them. Speech is synthesized in sentence-sized chunks
+  so the voice keeps its natural intonation; code blocks, tables, diagrams,
+  and math are skipped. Pressing `p` again pauses and resumes, `s` or `Esc`
+  stops, and `--read` starts reading as soon as the viewer opens.
+
+### Fixed
+
+- Read aloud: pausing and resuming now continues from the paused word instead
+  of failing with "speech synthesis stopped unexpectedly".
+- Speech and playback subprocesses no longer inherit the reader's stdin, so a
+  `say`/`afplay`/`curl` child can never swallow a keystroke.
+- The image capability query no longer runs on terminals that do not answer
+  it; `ratatui-image`'s query thread keeps reading stdin in the background
+  there and randomly ate keystrokes until it won a read race.
+- Reloading a file while it is being read aloud now says the narration stopped
+  instead of only reporting the reload.
 
 ## [0.1.0] - 2026-09-13
 

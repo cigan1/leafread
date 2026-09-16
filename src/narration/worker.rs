@@ -99,35 +99,41 @@ fn run(plan: Plan, engine: Engine, events: Sender<Ev>, commands: Receiver<Cmd>) 
             break; // the only failure path already reported the error
         };
 
-        let offset = plan.offset_bytes(index, from, pcm.data.len());
-        let audible = pcm.slice_from(offset);
-        let file = dir.join(format!("play-{index:04}.wav"));
-        if let Err(err) = wav::write_file(&file, &audible) {
-            let _ = events.send(Ev::Error(format!("cannot write audio: {err}")));
-            break;
-        }
         let chunk = &plan.chunks[index];
-        let _ = events.send(Ev::Sentence {
-            start: chunk.words.start,
-            end: chunk.words.end,
-        });
+        // Hold the chunk's PCM while it plays so pause/resume can restart it
+        // without re-synthesizing; `from` moves when playback resumes.
+        let mut from = from;
+        loop {
+            let audible = pcm.slice_from(plan.offset_bytes(index, from, pcm.data.len()));
+            let file = dir.join(format!("play-{index:04}.wav"));
+            if let Err(err) = wav::write_file(&file, &audible) {
+                let _ = events.send(Ev::Error(format!("cannot write audio: {err}")));
+                break 'narrate;
+            }
+            let _ = events.send(Ev::Sentence {
+                start: chunk.words.start,
+                end: chunk.words.end,
+            });
 
-        match play(
-            &plan,
-            index,
-            from,
-            &file,
-            audible.duration_secs(),
-            &events,
-            &commands,
-        ) {
-            Outcome::Played => position = (index + 1, 0),
-            Outcome::Stopped => break,
-            Outcome::Paused(word) => {
-                let local = word.saturating_sub(chunk.words.start);
-                match wait_for_resume(&commands) {
-                    true => position = (index, local),
-                    false => break 'narrate,
+            match play(
+                &plan,
+                index,
+                from,
+                &file,
+                audible.duration_secs(),
+                &events,
+                &commands,
+            ) {
+                Outcome::Played => {
+                    position = (index + 1, 0);
+                    continue 'narrate;
+                }
+                Outcome::Stopped => break 'narrate,
+                Outcome::Paused(word) => {
+                    if !wait_for_resume(&commands) {
+                        break 'narrate;
+                    }
+                    from = word.saturating_sub(chunk.words.start);
                 }
             }
         }

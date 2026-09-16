@@ -114,10 +114,6 @@ impl Narration {
         self.spoken.get(index).copied()
     }
 
-    pub fn engine_label(&self) -> &str {
-        &self.engine
-    }
-
     /// Start speaking `marks` from the first word at or below `from_line`.
     pub fn start(
         &mut self,
@@ -401,6 +397,91 @@ mod tests {
     fn speaks_end_to_end() {
         let source = "leafread renders Markdown in the terminal. \
                       Pressing p reads the page aloud, one highlighted word at a time.";
+        let words = render_words(source);
+
+        let mut narration = Narration::new();
+        narration
+            .start(&words, 0, &Config::default())
+            .expect("start narration");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+        let mut spoken: Vec<usize> = Vec::new();
+        let mut finished = false;
+        while std::time::Instant::now() < deadline {
+            if narration.poll() {
+                if let Some(error) = narration.take_error() {
+                    panic!("narration failed: {error}");
+                }
+                if narration.state() == State::Playing
+                    && let Some(current) = narration.current()
+                    && spoken.last() != Some(&current)
+                {
+                    spoken.push(current);
+                }
+                if !narration.active() {
+                    finished = true;
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        narration.stop();
+        assert!(finished, "narration did not finish in time");
+        assert!(spoken.len() > 5, "expected several words, saw {spoken:?}");
+        assert!(
+            spoken.windows(2).all(|pair| pair[1] >= pair[0]),
+            "word progress went backwards: {spoken:?}"
+        );
+    }
+
+    /// Regression: pause/resume used to lose the played chunk's audio and die
+    /// with "speech synthesis stopped unexpectedly". Uses the local macOS
+    /// voice so it stays deterministic: `cargo test -- --ignored
+    /// narration::tests::pause_and_resume_keeps_playing`
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "plays audio through the speakers"]
+    fn pause_and_resume_keeps_playing() {
+        let source = "The first sentence is here to speak aloud. \
+                      A second sentence follows the first one. \
+                      And a third sentence brings the test to an end.";
+        let words = render_words(source);
+        let config = Config {
+            engine: EngineChoice::Say,
+            ..Config::default()
+        };
+        let mut narration = Narration::new();
+        narration
+            .start(&words, 0, &config)
+            .expect("start narration");
+
+        wait_for_state(&mut narration, |state| state == State::Playing);
+        narration.pause();
+        wait_for_state(&mut narration, |state| state == State::Paused);
+        let paused_at = narration.current().expect("paused word");
+        narration.resume();
+        wait_for_state(&mut narration, |state| state == State::Playing);
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let mut latest = paused_at;
+        while narration.active() && std::time::Instant::now() < deadline {
+            narration.poll();
+            if let Some(error) = narration.take_error() {
+                panic!("resume failed: {error}");
+            }
+            if let Some(current) = narration.current() {
+                latest = latest.max(current);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        narration.stop();
+        assert!(
+            latest > paused_at,
+            "resume did not advance past word {paused_at}"
+        );
+        assert!(!narration.active(), "narration did not finish");
+    }
+
+    fn render_words(source: &str) -> Vec<WordMark> {
         let marks = crate::markdown::layout::render(
             &crate::markdown::parser::parse(source),
             &crate::markdown::layout::LayoutOptions {
@@ -414,38 +495,21 @@ mod tests {
             },
         );
         assert!(!marks.words.is_empty());
+        marks.words
+    }
 
-        let mut narration = Narration::new();
-        narration
-            .start(&marks.words, 0, &Config::default())
-            .expect("start narration");
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
-        let mut words: Vec<usize> = Vec::new();
-        let mut finished = false;
+    fn wait_for_state(narration: &mut Narration, predicate: impl Fn(State) -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         while std::time::Instant::now() < deadline {
-            if narration.poll() {
-                if let Some(error) = narration.take_error() {
-                    panic!("narration failed: {error}");
-                }
-                if narration.state() == State::Playing
-                    && let Some(current) = narration.current()
-                    && words.last() != Some(&current)
-                {
-                    words.push(current);
-                }
-                if !narration.active() {
-                    finished = true;
-                    break;
-                }
+            narration.poll();
+            if let Some(error) = narration.take_error() {
+                panic!("narration failed: {error}");
+            }
+            if predicate(narration.state()) {
+                return;
             }
             std::thread::sleep(std::time::Duration::from_millis(25));
         }
-        narration.stop();
-        assert!(finished, "narration did not finish in time");
-        assert!(words.len() > 5, "expected several words, saw {words:?}");
-        assert!(
-            words.windows(2).all(|pair| pair[1] >= pair[0]),
-            "word progress went backwards: {words:?}"
-        );
+        panic!("narration never reached the expected state");
     }
 }

@@ -54,7 +54,7 @@ pub struct Cli {
     #[arg(long, default_value = "auto", value_name = "ENGINE")]
     pub tts: String,
 
-    /// Voice for the speech engine (default: Leda for gemini, system voice for say)
+    /// Voice for the speech engine: Leda (default), Aoede, Sulafat, Achernar, Callirrhoe, Kore
     #[arg(long)]
     pub voice: Option<String>,
 
