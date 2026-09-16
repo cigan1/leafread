@@ -27,7 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `say`/`afplay`/`curl` child can never swallow a keystroke.
 - The image capability query no longer runs on terminals that do not answer
   it; `ratatui-image`'s query thread keeps reading stdin in the background
-  there and randomly ate keystrokes until it won a read race.
+  there and randomly ate keystrokes until it won a read race. The terminal is
+  now asked from a child process, so a terminal that answers opens the viewer
+  immediately instead of hanging behind a reply that crossterm cannot parse,
+  and a terminal that never answers is answered by killing the child.
 - Reloading a file while it is being read aloud now says the narration stopped
   instead of only reporting the reload.
 

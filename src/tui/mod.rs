@@ -5,8 +5,7 @@ pub mod files;
 pub mod images;
 pub mod ui;
 
-use std::io::{self, IsTerminal, Write};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::Result;
 use ratatui::crossterm::event::{self, Event, KeyEventKind};
@@ -14,10 +13,8 @@ use ratatui_image::picker::Picker;
 
 use crate::markdown::theme::Theme;
 use crate::narration;
+use crate::terminal;
 use app::{App, Initial, Mode};
-
-/// How long to wait for the terminal's answer to a device-status query.
-const TERMINAL_PROBE: Duration = Duration::from_millis(350);
 
 /// Run the interactive viewer. Returns when the user quits.
 pub fn run(
@@ -27,9 +24,9 @@ pub fn run(
     narration_config: narration::Config,
     start_reading: bool,
 ) -> Result<()> {
+    let picker = picker();
     let mut terminal = ratatui::init();
     let size = terminal.size()?;
-    let picker = picker();
     let mut app = App::new(initial, theme, picker, watch, narration_config);
     app.width = size.width;
     app.height = size.height;
@@ -53,36 +50,10 @@ pub fn run(
 /// input, so only query a terminal that has proven it replies; otherwise fall
 /// back to half-blocks.
 fn picker() -> Option<Picker> {
-    if !io::stdin().is_terminal() || !terminal_answers() {
+    if !terminal::answers() {
         return Some(Picker::halfblocks());
     }
     Some(Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks()))
-}
-
-/// Ask for a device status report (`CSI 5 n`) and report whether the terminal
-/// answered within [`TERMINAL_PROBE`]. The reply is drained so the event loop
-/// starts with clean input. Must run with raw mode already enabled.
-fn terminal_answers() -> bool {
-    let mut stdout = io::stdout();
-    if stdout
-        .write_all(b"\x1b[5n")
-        .and_then(|_| stdout.flush())
-        .is_err()
-    {
-        return false;
-    }
-    let deadline = Instant::now() + TERMINAL_PROBE;
-    let mut answered = false;
-    while !answered {
-        let Some(left) = deadline.checked_duration_since(Instant::now()) else {
-            break;
-        };
-        answered = event::poll(left).unwrap_or(false);
-    }
-    while event::poll(Duration::ZERO).unwrap_or(false) {
-        let _ = event::read();
-    }
-    answered
 }
 
 fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
@@ -118,7 +89,10 @@ mod tests {
     /// there is no terminal on the other end to answer it.
     #[test]
     fn picker_does_not_query_a_non_terminal_stdin() {
-        assert!(!io::stdin().is_terminal(), "cargo test pipes stdin");
+        assert!(
+            !std::io::IsTerminal::is_terminal(&std::io::stdin()),
+            "cargo test pipes stdin"
+        );
         let picker = picker().expect("fallback picker");
         assert_eq!(picker.protocol_type(), ProtocolType::Halfblocks);
     }

@@ -61,6 +61,10 @@ pub struct Cli {
     /// Delivery instruction for Gemini TTS, e.g. "slower and calmer"
     #[arg(long, value_name = "TEXT")]
     pub tts_style: Option<String>,
+
+    /// Internal: probe the terminal from a child process and write the answer
+    #[arg(long, value_name = "REPLY", hide = true)]
+    pub probe_terminal: Option<PathBuf>,
 }
 
 /// Parse command-line arguments.

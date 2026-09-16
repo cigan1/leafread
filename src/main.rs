@@ -6,6 +6,7 @@ mod markdown;
 mod math;
 mod mermaid;
 mod narration;
+mod terminal;
 mod tui;
 
 use std::io::{self, IsTerminal, Read, Write};
@@ -25,6 +26,9 @@ enum Input {
 
 fn main() -> Result<()> {
     let cli = cli::parse();
+    if let Some(reply_path) = &cli.probe_terminal {
+        return terminal::answer_probe(reply_path).context("cannot probe the terminal");
+    }
     let theme = Theme::from_name(&cli.theme);
     let stdout_tty = io::stdout().is_terminal();
     let stdin_tty = io::stdin().is_terminal();
