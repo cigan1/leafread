@@ -45,6 +45,22 @@ pub struct Cli {
     /// Do not emit OSC 8 clickable hyperlinks
     #[arg(long)]
     pub no_hyperlinks: bool,
+
+    /// Start reading the document aloud when the viewer opens
+    #[arg(long)]
+    pub read: bool,
+
+    /// Speech engine: auto (Gemini when a key is set, otherwise local), gemini, say, espeak
+    #[arg(long, default_value = "auto", value_name = "ENGINE")]
+    pub tts: String,
+
+    /// Voice for the speech engine (default: Leda for gemini, system voice for say)
+    #[arg(long)]
+    pub voice: Option<String>,
+
+    /// Delivery instruction for Gemini TTS, e.g. "slower and calmer"
+    #[arg(long, value_name = "TEXT")]
+    pub tts_style: Option<String>,
 }
 
 /// Parse command-line arguments.

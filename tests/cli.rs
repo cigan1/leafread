@@ -105,6 +105,19 @@ fn help_lists_key_options() {
     assert!(stdout.contains("--theme"), "{stdout}");
     assert!(stdout.contains("--watch"), "{stdout}");
     assert!(stdout.contains("--no-tui"), "{stdout}");
+    assert!(stdout.contains("--read"), "{stdout}");
+    assert!(stdout.contains("--tts"), "{stdout}");
+}
+
+#[test]
+fn unknown_tts_engine_is_rejected() {
+    let output = binary()
+        .args(["--no-tui", "--tts", "festival", &fixture("kitchen-sink.md")])
+        .output()
+        .expect("run leafread");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("unknown TTS engine"), "{stderr}");
 }
 
 #[test]

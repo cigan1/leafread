@@ -13,6 +13,7 @@ use crate::markdown::model::Document;
 use crate::markdown::parser;
 use crate::markdown::syntax::Highlighter;
 use crate::markdown::theme::Theme;
+use crate::narration::{self, Narration};
 use crate::tui::files::FileBrowser;
 use crate::tui::images::ImageCache;
 
@@ -66,6 +67,8 @@ pub struct App {
     pub link_selected: Option<usize>,
     pub files: Option<FileBrowser>,
     pub images: ImageCache,
+    pub narration: Narration,
+    narration_config: narration::Config,
     pub watch: bool,
     watcher: Option<RecommendedWatcher>,
     watch_rx: Option<Receiver<()>>,
@@ -75,7 +78,13 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(initial: Initial, theme: Theme, picker: Option<Picker>, watch: bool) -> Self {
+    pub fn new(
+        initial: Initial,
+        theme: Theme,
+        picker: Option<Picker>,
+        watch: bool,
+        narration_config: narration::Config,
+    ) -> Self {
         let highlighter = Highlighter::new(theme.syntax_theme, theme.text);
         let mut app = Self {
             theme,
@@ -103,6 +112,8 @@ impl App {
             link_selected: None,
             files: None,
             images: ImageCache::new(picker),
+            narration: Narration::new(),
+            narration_config,
             watch,
             watcher: None,
             watch_rx: None,
@@ -163,6 +174,10 @@ impl App {
         self.toc_selected = self
             .toc_selected
             .min(self.rendered.toc.len().saturating_sub(1));
+        if self.narration.active() && !self.narration.matches(&self.rendered.words) {
+            self.narration.stop();
+            self.set_status("read aloud stopped (document changed)".into());
+        }
     }
 
     fn clamp_scroll(&mut self) {
@@ -209,6 +224,7 @@ impl App {
 
     pub fn load_path(&mut self, path: &Path) -> std::io::Result<()> {
         let raw = std::fs::read_to_string(path)?;
+        self.narration.stop();
         self.raw = raw;
         self.doc = parser::parse(&self.raw);
         self.path = Some(path.to_path_buf());
@@ -253,6 +269,78 @@ impl App {
 
     pub fn set_status(&mut self, message: String) {
         self.status = Some((message, Instant::now()));
+    }
+
+    /// Start speaking the document from the current scroll position.
+    pub fn start_narration(&mut self) {
+        if self.rendered.words.is_empty() {
+            self.set_status("nothing to read aloud here".into());
+            return;
+        }
+        match self
+            .narration
+            .start(&self.rendered.words, self.scroll, &self.narration_config)
+        {
+            Ok(()) => self.set_status(format!(
+                "reading aloud ({}) — p pause, s stop",
+                self.narration.engine_label()
+            )),
+            Err(message) => self.set_status(message),
+        }
+    }
+
+    /// `p`: start, pause, or resume narration.
+    pub fn toggle_narration(&mut self) {
+        match self.narration.state() {
+            narration::State::Playing | narration::State::Paused => self.narration.toggle_pause(),
+            narration::State::Preparing => self.set_status("still preparing speech…".into()),
+            narration::State::Idle => self.start_narration(),
+        }
+    }
+
+    /// `s` (or esc): stop narration and silence the audio.
+    pub fn stop_narration(&mut self) {
+        if self.narration.active() {
+            self.narration.stop();
+            self.set_status("read aloud stopped".into());
+        }
+    }
+
+    /// Stop all background work; called when the viewer exits.
+    pub fn shutdown(&mut self) {
+        self.narration.stop();
+    }
+
+    /// Pick up narration progress: surface failures, follow the spoken word.
+    pub fn poll_narration(&mut self) {
+        if !self.narration.poll() {
+            return;
+        }
+        if let Some(message) = self.narration.take_error() {
+            self.set_status(message);
+        }
+        if let Some(word) = self.narration.current() {
+            self.follow_word(word);
+        }
+    }
+
+    fn follow_word(&mut self, spoken: usize) {
+        let Some(source) = self.narration.source_index(spoken) else {
+            return;
+        };
+        let Some(segment) = self
+            .rendered
+            .words
+            .get(source)
+            .and_then(|mark| mark.segments.first())
+        else {
+            return;
+        };
+        let height = self.viewport_height();
+        let line = segment.line;
+        if line < self.scroll || line >= self.scroll + height {
+            self.scroll_to(line.saturating_sub(height / 4));
+        }
     }
 
     pub fn status_message(&self) -> Option<&str> {
@@ -557,7 +645,9 @@ impl App {
         match key.code {
             KeyCode::Char('q') => self.quit = true,
             KeyCode::Esc => {
-                if !self.search.query.is_empty() {
+                if self.narration.active() {
+                    self.stop_narration();
+                } else if !self.search.query.is_empty() {
                     self.search.query.clear();
                     self.recompute_matches();
                     self.set_status("search cleared".into());
@@ -618,6 +708,8 @@ impl App {
                 self.show_front_matter = !self.show_front_matter;
                 self.relayout();
             }
+            KeyCode::Char('p') => self.toggle_narration(),
+            KeyCode::Char('s') => self.stop_narration(),
             KeyCode::Char('?') => self.mode = Mode::Help,
             _ => {}
         }
@@ -666,7 +758,13 @@ mod tests {
             raw: "# Title\n\nhello world\n".into(),
             directory: None,
         };
-        let mut app = App::new(initial, Theme::mono(), None, false);
+        let mut app = App::new(
+            initial,
+            Theme::mono(),
+            None,
+            false,
+            narration::Config::default(),
+        );
         app.width = 60;
         app.height = 20;
         app.relayout();
@@ -688,10 +786,36 @@ mod tests {
             raw: String::new(),
             directory: Some(dir.clone()),
         };
-        let app = App::new(initial, Theme::mono(), None, false);
+        let app = App::new(
+            initial,
+            Theme::mono(),
+            None,
+            false,
+            narration::Config::default(),
+        );
         assert!(app.files.is_some());
         let files = app.files.as_ref().unwrap();
         assert!(files.entries.iter().any(|e| e.name == "doc.md"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reading_aloud_with_nothing_to_speak_reports_it() {
+        let initial = Initial {
+            path: None,
+            raw: String::new(),
+            directory: None,
+        };
+        let mut app = App::new(
+            initial,
+            Theme::mono(),
+            None,
+            false,
+            narration::Config::default(),
+        );
+        app.relayout();
+        app.toggle_narration();
+        assert!(!app.narration.active());
+        assert_eq!(app.status_message(), Some("nothing to read aloud here"));
     }
 }

@@ -36,6 +36,7 @@ pipeline from bytes to styled lines, with two consumers.
 | `src/tui/ui.rs` | painting: header, content, status, overlays |
 | `src/tui/files.rs` | Markdown file browser |
 | `src/tui/images.rs` | image loading and protocol cache |
+| `src/narration/` | read aloud: speech backends, chunk planning, word timing, background playback |
 
 ## The layout engine
 
@@ -81,6 +82,25 @@ scrolling through a large document does not load every image.
 
 The event loop polls crossterm with a 100 ms timeout so file-system events are
 noticed promptly without burning CPU.
+
+## Read aloud
+
+`src/narration/` speaks the document while the viewer highlights the word being
+voiced. `layout.rs` records every prose word with the screen segments it
+occupies (`Rendered::words`), so the viewer can decorate a line without
+re-parsing Markdown; table cells, code, diagrams, and rules never enter that
+list. `plan.rs` groups the words into chunks that close at sentence punctuation
+(~140 characters), and estimates each word's share of its chunk's duration from
+word length plus a pause allowance. `tts.rs` synthesizes a chunk through Gemini
+TTS (via `curl`, key from the environment or a key file), macOS `say`, or
+`espeak-ng`, and plays the audio with a platform player (`afplay`, `paplay`,
+`aplay`, `ffplay`, …). `worker.rs` runs synthesis and playback on a background
+thread, synthesizing ahead of playback, and reports the spoken word index to
+the TUI over a channel; the viewer resolves that index through
+`Rendered::words` to paint the word and follow it. TTS engines expose no word
+timings, so chunk boundaries are the resynchronization points — the highlight
+can lag or lead slightly inside a chunk but snaps back in step at every
+sentence.
 
 ## Piped mode
 

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Read aloud (`p`, `s`, `--read`): speaks the document with the word being
+  voiced highlighted and the view following along. Speaks from the current
+  scroll position. Backends: Gemini TTS (voice `Leda` by default, API key from
+  `GEMINI_API_KEY`/`GOOGLE_API_KEY` or `~/.ssh/gemini_key`) with local `say`
+  (macOS) or `espeak-ng` (Linux) fallbacks; `--tts`, `--voice`, and
+  `--tts-style` configure them. Speech is synthesized in short chunks, so the
+  highlight resynchronizes on every sentence; code blocks, tables, diagrams,
+  and math are skipped.
+
 ## [0.1.0] - 2026-09-13
 
 Initial release.

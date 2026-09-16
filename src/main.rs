@@ -5,6 +5,7 @@ mod cli;
 mod markdown;
 mod math;
 mod mermaid;
+mod narration;
 mod tui;
 
 use std::io::{self, IsTerminal, Read, Write};
@@ -27,6 +28,14 @@ fn main() -> Result<()> {
     let theme = Theme::from_name(&cli.theme);
     let stdout_tty = io::stdout().is_terminal();
     let stdin_tty = io::stdin().is_terminal();
+    let narration_config = narration::Config {
+        engine: narration::EngineChoice::parse(&cli.tts).map_err(anyhow::Error::msg)?,
+        voice: cli.voice.clone(),
+        style: cli
+            .tts_style
+            .clone()
+            .unwrap_or_else(|| narration::Config::default().style),
+    };
 
     let input = match &cli.path {
         Some(path) if path.as_os_str() == "-" => Input::Stdin(read_stdin()?),
@@ -38,12 +47,17 @@ fn main() -> Result<()> {
     };
 
     if stdout_tty && !cli.no_tui {
-        return run_tui(input, theme, &cli);
+        return run_tui(input, theme, &cli, narration_config);
     }
     run_pipe(input, theme, &cli, stdout_tty)
 }
 
-fn run_tui(input: Input, theme: Theme, cli: &cli::Cli) -> Result<()> {
+fn run_tui(
+    input: Input,
+    theme: Theme,
+    cli: &cli::Cli,
+    narration_config: narration::Config,
+) -> Result<()> {
     let initial = match input {
         Input::File(path) => {
             let raw = std::fs::read_to_string(&path)
@@ -65,7 +79,7 @@ fn run_tui(input: Input, theme: Theme, cli: &cli::Cli) -> Result<()> {
             directory: None,
         },
     };
-    tui::run(initial, theme, cli.watch)
+    tui::run(initial, theme, cli.watch, narration_config, cli.read)
 }
 
 fn run_pipe(input: Input, theme: Theme, cli: &cli::Cli, stdout_tty: bool) -> Result<()> {
