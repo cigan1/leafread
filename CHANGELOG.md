@@ -11,7 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Read aloud (`p`, `s`, `--read`): speaks the document with the word being
   voiced highlighted and the view following along. Speaks from the current
-  scroll position. Backends: Gemini TTS (voice `Leda` by default, API key from
+  scroll position. `]` and `[` skip a sentence forward or back, while reading or
+  paused. Backends: Gemini TTS (voice `Leda` by default, API key from
   `GEMINI_API_KEY`/`GOOGLE_API_KEY` or `~/.ssh/gemini_key`) with local `say`
   (macOS) or `espeak-ng` (Linux) fallbacks; `--tts`, `--voice`, and
   `--tts-style` configure them. Speech is synthesized in sentence-sized chunks
@@ -33,6 +34,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and a terminal that never answers is answered by killing the child.
 - Reloading a file while it is being read aloud now says the narration stopped
   instead of only reporting the reload.
+- The graphics capability query no longer prints its payload on terminals that
+  do not implement it, where the kitty query was echoed as text on the screen
+  behind the viewer and stayed there after quitting; it is only sent to
+  terminals known to answer it (kitty, Ghostty) and the rest still report
+  sixel, font size, and iTerm2 support.
+- The query can no longer leave the terminal in line-buffered mode: its thread
+  switches raw mode off when it finishes, which raced the viewer's own raw-mode
+  setup and made the first keystroke look lost.
 
 ## [0.1.0] - 2026-09-13
 

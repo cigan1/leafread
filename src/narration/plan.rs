@@ -93,6 +93,34 @@ impl Plan {
         Plan { words, chunks }
     }
 
+    /// Spoken indices where a sentence begins: where `]` and `[` land. Every
+    /// chunk starts one, plus every word that follows sentence punctuation, so
+    /// skipping stays a sentence step even inside a merged chunk.
+    pub fn sentence_starts(&self) -> Vec<usize> {
+        let mut starts: Vec<usize> = self
+            .words
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| *index == 0 || ends_sentence(&self.words[index - 1].text))
+            .map(|(index, _)| index)
+            .collect();
+        for chunk in &self.chunks {
+            if !starts.contains(&chunk.words.start) {
+                starts.push(chunk.words.start);
+            }
+        }
+        starts.sort_unstable();
+        starts
+    }
+
+    /// Where spoken word `word` sits: the chunk that holds it and the word's
+    /// offset within that chunk.
+    pub fn locate(&self, word: usize) -> Option<(usize, usize)> {
+        let index = self.chunks.partition_point(|chunk| chunk.words.end <= word);
+        let chunk = self.chunks.get(index)?;
+        (word >= chunk.words.start).then_some((index, word - chunk.words.start))
+    }
+
     /// The word (index into [`Plan::words`]) being spoken `elapsed` seconds
     /// into a chunk of `duration`, starting from word `from` inside it.
     pub fn word_at(&self, chunk: usize, from: usize, elapsed: f64, duration: f64) -> usize {
@@ -327,5 +355,35 @@ spoken as one natural piece of audio without cutting it in half.";
             plan.offset_bytes(0, 1, 1000) < plan.offset_bytes(0, 2, 1000),
             "later words start later"
         );
+    }
+
+    #[test]
+    fn sentence_starts_mark_sentences_and_chunk_boundaries() {
+        let plan = Plan::build(
+            &marks(&["Hi.", "Ok.", "Sure.", "A", "new", "paragraph."]),
+            0,
+            60,
+        );
+        // "Hi. Ok. Sure." merges into one chunk, and its later sentences are
+        // still landing spots.
+        assert_eq!(plan.sentence_starts(), vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn sentence_starts_include_a_chunk_that_opens_without_punctuation() {
+        let plan = Plan::build(&marks(&["Install", "leafread", "then", "read."]), 0, 16);
+        assert_eq!(plan.chunks.len(), 2, "{:?}", plan.chunks);
+        assert_eq!(plan.sentence_starts(), vec![0, 2]);
+    }
+
+    #[test]
+    fn locate_finds_the_chunk_holding_a_word() {
+        let plan = Plan::build(&marks(&["One.", "Two.", "Three.", "Four.", "Five."]), 0, 12);
+        assert_eq!(plan.chunks.len(), 3, "{:?}", plan.chunks);
+        assert_eq!(plan.locate(0), Some((0, 0)));
+        assert_eq!(plan.locate(1), Some((0, 1)));
+        assert_eq!(plan.locate(2), Some((1, 0)));
+        assert_eq!(plan.locate(4), Some((2, 0)));
+        assert_eq!(plan.locate(5), None, "past the last word");
     }
 }

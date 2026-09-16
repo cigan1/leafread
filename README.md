@@ -72,8 +72,8 @@ binaries, Homebrew, and the full option list are below.
 - **Directory browser**: run it with no arguments to pick a file
 - **Live reload**: `w` (or `--watch`) re-renders when the file changes on disk
 - **Read aloud**: `p` speaks the page from where you are reading, highlighting
-  each word as it is voiced, with the view following along (`s` stops; `--read`
-  starts immediately)
+  each word as it is voiced, with the view following along (`]`/`[` skip a
+  sentence, `s` stops; `--read` starts immediately)
 - **Themes**: `dark`, `light`, `mono` (modifiers only), `NO_COLOR` respected
 
 [ratatui-image]: https://github.com/ratatui/ratatui-image
@@ -143,6 +143,7 @@ leafread --no-tui notes.md | less -R
 | `r` | Reload now |
 | `m` | Toggle front matter |
 | `p` | Read aloud from here; pause / resume while reading |
+| `]` / `[` | Skip a sentence forward / back while reading |
 | `s` | Stop reading aloud |
 | `?` | Help overlay |
 | `q` | Quit |
@@ -174,8 +175,10 @@ leafread [OPTIONS] [PATH]
 
 Press `p` in the reader to hear the document from the top of your view onwards:
 the word being spoken is highlighted, the rest of the spoken sentence is
-tinted, and the view scrolls to follow. `p` pauses and resumes; `s` (or `Esc`)
-stops. `leafread --read notes.md` starts reading as soon as the viewer opens.
+tinted, and the view scrolls to follow. `p` pauses and resumes, `]` and `[` step
+a sentence forward or back (also while paused, where the highlight moves but the
+voice waits), and `s` (or `Esc`) stops. `leafread --read notes.md` starts reading
+as soon as the viewer opens.
 
 Speech comes from **Gemini TTS** (voice `Leda` by default) when an API key is
 available — `GEMINI_API_KEY`, `GOOGLE_API_KEY`, or a key file at

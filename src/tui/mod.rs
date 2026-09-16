@@ -10,6 +10,8 @@ use std::time::Duration;
 use anyhow::Result;
 use ratatui::crossterm::event::{self, Event, KeyEventKind};
 use ratatui_image::picker::Picker;
+use ratatui_image::picker::ProtocolType;
+use ratatui_image::picker::cap_parser::QueryStdioOptions;
 
 use crate::markdown::theme::Theme;
 use crate::narration;
@@ -25,6 +27,7 @@ pub fn run(
     start_reading: bool,
 ) -> Result<()> {
     let picker = picker();
+    terminal::reclaim_raw_mode();
     let mut terminal = ratatui::init();
     let size = terminal.size()?;
     let mut app = App::new(initial, theme, picker, watch, narration_config);
@@ -53,7 +56,16 @@ fn picker() -> Option<Picker> {
     if !terminal::answers() {
         return Some(Picker::halfblocks());
     }
-    Some(Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks()))
+    let mut options = QueryStdioOptions::default();
+    if !terminal::kitty_graphics_terminal() {
+        // The kitty query carries a visible payload. A terminal that does not
+        // implement the protocol prints it instead of answering, and it lands
+        // on the main screen, where it outlives the viewer. Ask only terminals
+        // known to answer it silently; the rest still report sixel, font size
+        // and iTerm2 support.
+        options.blacklist_protocols.push(ProtocolType::Kitty);
+    }
+    Some(Picker::from_query_stdio_with_options(options).unwrap_or_else(|_| Picker::halfblocks()))
 }
 
 fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {

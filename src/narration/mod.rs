@@ -66,6 +66,8 @@ pub struct Narration {
     handle: Option<JoinHandle<()>>,
     /// Spoken word index -> index in [`crate::markdown::layout::Rendered::words`].
     spoken: Vec<usize>,
+    /// Spoken indices where a sentence begins, for `]` and `[`.
+    sentences: Vec<usize>,
     current: usize,
     sentence: Range<usize>,
     engine: String,
@@ -87,6 +89,7 @@ impl Narration {
             events: None,
             handle: None,
             spoken: Vec::new(),
+            sentences: Vec::new(),
             current: 0,
             sentence: 0..0,
             engine: String::new(),
@@ -134,6 +137,7 @@ impl Narration {
         let (command_tx, command_rx) = mpsc::channel();
         let (event_tx, event_rx) = mpsc::channel();
         self.spoken = plan.words.iter().map(|word| word.source).collect();
+        self.sentences = plan.sentence_starts();
         self.current = 0;
         self.sentence = 0..self.spoken.len();
         self.fingerprint = fingerprint(marks);
@@ -168,6 +172,22 @@ impl Narration {
         }
     }
 
+    /// Move to the next or previous sentence, keeping the state: reading
+    /// continues from there when playing, and the pointer moves in place while
+    /// paused or still preparing. The highlight moves at once; the worker
+    /// confirms with the word it actually starts on.
+    pub fn skip_sentence(&mut self, forward: bool) {
+        if !self.active() {
+            return;
+        }
+        let Some(target) = next_sentence_start(&self.sentences, self.current, forward) else {
+            return;
+        };
+        self.current = target;
+        self.sentence = sentence_range(&self.sentences, self.spoken.len(), target);
+        self.send(worker::Cmd::Seek(target));
+    }
+
     /// Stop and join the worker, silencing any audio still playing.
     pub fn stop(&mut self) {
         if self.commands.is_some() {
@@ -179,6 +199,7 @@ impl Narration {
         self.commands = None;
         self.events = None;
         self.spoken.clear();
+        self.sentences.clear();
         self.sentence = 0..0;
         self.state = State::Idle;
     }
@@ -242,9 +263,12 @@ impl Narration {
     pub fn status(&self) -> Option<String> {
         match self.state {
             State::Idle => None,
-            State::Preparing => Some(format!("◌ preparing speech ({}) · s stop", self.engine)),
-            State::Playing => Some("▶ reading aloud · p pause · s stop".to_string()),
-            State::Paused => Some("⏸ paused · p resume · s stop".to_string()),
+            State::Preparing => Some(format!(
+                "◌ preparing speech ({}) · ] [ skip · s stop",
+                self.engine
+            )),
+            State::Playing => Some("▶ reading aloud · p pause · ] [ skip · s stop".to_string()),
+            State::Paused => Some("⏸ paused · p resume · ] [ skip · s stop".to_string()),
         }
     }
 
@@ -258,10 +282,12 @@ impl Narration {
     pub(crate) fn debug_state(
         &mut self,
         spoken: Vec<usize>,
+        sentences: Vec<usize>,
         sentence: Range<usize>,
         current: usize,
     ) {
         self.spoken = spoken;
+        self.sentences = sentences;
         self.sentence = sentence;
         self.current = current;
         self.state = State::Playing;
@@ -310,6 +336,46 @@ impl Narration {
             Some(LineMarks { word, sentence })
         }
     }
+}
+
+/// The start of the sentence that holds `word`.
+fn sentence_start_at(starts: &[usize], word: usize) -> usize {
+    starts
+        .iter()
+        .copied()
+        .take_while(|start| *start <= word)
+        .last()
+        .unwrap_or(0)
+}
+
+/// Where skipping lands from `word`: the next sentence start (or, going back,
+/// the start of the current sentence, then the one before it).
+fn next_sentence_start(starts: &[usize], word: usize, forward: bool) -> Option<usize> {
+    if forward {
+        starts.iter().copied().find(|start| *start > word)
+    } else {
+        let here = sentence_start_at(starts, word);
+        if here < word {
+            Some(here)
+        } else {
+            starts
+                .iter()
+                .copied()
+                .take_while(|start| *start < here)
+                .last()
+        }
+    }
+}
+
+/// The words of the sentence that holds `word`.
+fn sentence_range(starts: &[usize], total: usize, word: usize) -> Range<usize> {
+    let start = sentence_start_at(starts, word);
+    let end = starts
+        .iter()
+        .copied()
+        .find(|next| *next > start)
+        .unwrap_or(total);
+    start..end
 }
 
 /// Order-sensitive hash of the word sequence, used to notice document changes.
@@ -374,9 +440,65 @@ mod tests {
     }
 
     #[test]
+    fn sentence_navigation_covers_the_edges() {
+        let starts = [0, 2, 5];
+        assert_eq!(next_sentence_start(&starts, 0, true), Some(2));
+        assert_eq!(next_sentence_start(&starts, 1, true), Some(2));
+        assert_eq!(next_sentence_start(&starts, 4, true), Some(5));
+        assert_eq!(next_sentence_start(&starts, 5, true), None, "last sentence");
+        assert_eq!(next_sentence_start(&starts, 0, false), None, "first word");
+        assert_eq!(next_sentence_start(&starts, 1, false), Some(0));
+        assert_eq!(
+            next_sentence_start(&starts, 4, false),
+            Some(2),
+            "mid-sentence goes back to its start"
+        );
+        assert_eq!(next_sentence_start(&starts, 5, false), Some(2));
+        assert_eq!(sentence_range(&starts, 6, 0), 0..2);
+        assert_eq!(sentence_range(&starts, 6, 3), 2..5);
+        assert_eq!(sentence_range(&starts, 6, 5), 5..6);
+    }
+
+    #[test]
+    fn skipping_moves_the_pointer_and_the_sentence_tint() {
+        let mut narration = Narration::new();
+        narration.debug_state(vec![0, 1, 2, 3, 4, 5], vec![0, 2, 5], 0..2, 1);
+        narration.skip_sentence(true);
+        assert_eq!(narration.current(), Some(2));
+        assert_eq!(narration.sentence, 2..5);
+        narration.skip_sentence(true);
+        assert_eq!(narration.current(), Some(5));
+        assert_eq!(narration.sentence, 5..6);
+        narration.skip_sentence(true);
+        assert_eq!(
+            narration.current(),
+            Some(5),
+            "nothing past the last sentence"
+        );
+        narration.skip_sentence(false);
+        assert_eq!(narration.current(), Some(2), "back from a sentence start");
+        narration.skip_sentence(false);
+        assert_eq!(narration.current(), Some(0));
+        narration.skip_sentence(false);
+        assert_eq!(
+            narration.current(),
+            Some(0),
+            "nothing before the first word"
+        );
+    }
+
+    #[test]
+    fn skipping_is_ignored_while_idle() {
+        let mut narration = Narration::new();
+        narration.skip_sentence(true);
+        assert!(!narration.active());
+        assert_eq!(narration.current(), None);
+    }
+
+    #[test]
     fn marks_report_the_spoken_word_and_its_sentence() {
         let mut narration = Narration::new();
-        narration.debug_state(vec![0, 1, 2], 0..3, 1);
+        narration.debug_state(vec![0, 1, 2], vec![0], 0..3, 1);
         let marks = marks(&[("alpha", 0), ("beta", 1), ("gamma", 1)]);
         let line = narration.marks_for_line(&marks, 1).unwrap();
         assert_eq!(line.word, vec![(0, 4)], "beta is the spoken word");
@@ -477,6 +599,56 @@ mod tests {
         assert!(
             latest > paused_at,
             "resume did not advance past word {paused_at}"
+        );
+        assert!(!narration.active(), "narration did not finish");
+    }
+
+    /// Regression: `]` must jump the voice to the next sentence and keep
+    /// playing from there. Uses the local macOS voice so it stays
+    /// deterministic: `cargo test -- --ignored
+    /// narration::tests::skip_forward_keeps_playing`
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "plays audio through the speakers"]
+    fn skip_forward_keeps_playing() {
+        let source = "The first sentence is here to speak aloud. \
+                      A second sentence follows the first one. \
+                      A third sentence brings the test to an end.";
+        let words = render_words(source);
+        let config = Config {
+            engine: EngineChoice::Say,
+            ..Config::default()
+        };
+        let mut narration = Narration::new();
+        narration
+            .start(&words, 0, &config)
+            .expect("start narration");
+
+        wait_for_state(&mut narration, |state| state == State::Playing);
+        let before = narration.current().expect("spoken word");
+        narration.skip_sentence(true);
+        let jumped = narration.current().expect("skipped word");
+        assert!(
+            jumped > before,
+            "skip did not move forward: {before} -> {jumped}"
+        );
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let mut latest = jumped;
+        while narration.active() && std::time::Instant::now() < deadline {
+            narration.poll();
+            if let Some(error) = narration.take_error() {
+                panic!("skip failed: {error}");
+            }
+            if let Some(current) = narration.current() {
+                latest = latest.max(current);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        narration.stop();
+        assert!(
+            latest > jumped,
+            "playback did not continue past the skipped-to word"
         );
         assert!(!narration.active(), "narration did not finish");
     }

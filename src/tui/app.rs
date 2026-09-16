@@ -313,6 +313,15 @@ impl App {
         }
     }
 
+    /// `]` / `[`: move the narration a sentence forward or back.
+    pub fn skip_narration(&mut self, forward: bool) {
+        if self.narration.active() {
+            self.narration.skip_sentence(forward);
+        } else {
+            self.set_status("press p to read aloud first".into());
+        }
+    }
+
     /// Stop all background work; called when the viewer exits.
     pub fn shutdown(&mut self) {
         self.narration.stop();
@@ -493,16 +502,6 @@ impl App {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) {
-        if let Some(path) = std::env::var_os("LEAFREAD_KEYLOG") {
-            use std::io::Write as _;
-            if let Ok(mut f) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)
-            {
-                let _ = writeln!(f, "{:?} {:?}", key.code, key.modifiers);
-            }
-        }
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             self.quit = true;
             return;
@@ -727,6 +726,8 @@ impl App {
             }
             KeyCode::Char('p') => self.toggle_narration(),
             KeyCode::Char('s') => self.stop_narration(),
+            KeyCode::Char(']') => self.skip_narration(true),
+            KeyCode::Char('[') => self.skip_narration(false),
             KeyCode::Char('?') => self.mode = Mode::Help,
             _ => {}
         }

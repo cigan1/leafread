@@ -19,6 +19,8 @@ use super::wav::{self, Pcm};
 pub enum Cmd {
     Pause,
     Resume,
+    /// Jump to a spoken word (index into the plan's words) and carry on there.
+    Seek(usize),
     Stop,
 }
 
@@ -61,7 +63,7 @@ fn run(plan: Plan, engine: Engine, events: Sender<Ev>, commands: Receiver<Cmd>) 
     let chunk_count = plan.chunks.len();
     let tasks: Arc<Mutex<VecDeque<usize>>> = Arc::new(Mutex::new((0..chunk_count).collect()));
     let cancel = Arc::new(AtomicBool::new(false));
-    let (result_tx, result_rx) = mpsc::channel::<(usize, Result<Pcm, String>)>();
+    let (result_tx, result_rx) = mpsc::channel::<(usize, Result<Arc<Pcm>, String>)>();
     for _ in 0..chunk_count.min(SYNTH_WORKERS) {
         let tasks = Arc::clone(&tasks);
         let cancel = Arc::clone(&cancel);
@@ -75,7 +77,7 @@ fn run(plan: Plan, engine: Engine, events: Sender<Ev>, commands: Receiver<Cmd>) 
                     break;
                 };
                 let text = plan.chunks[index].text.clone();
-                let result = engine.synthesize(&text, &dir, index);
+                let result = engine.synthesize(&text, &dir, index).map(Arc::new);
                 if result_tx.send((index, result)).is_err() {
                     break;
                 }
@@ -84,7 +86,10 @@ fn run(plan: Plan, engine: Engine, events: Sender<Ev>, commands: Receiver<Cmd>) 
     }
     drop(result_tx);
 
-    let mut slots: Vec<Option<Result<Pcm, String>>> = (0..chunk_count).map(|_| None).collect();
+    // Chunks stay in their slot after playing so `[` can go back without
+    // synthesizing again; synthesis already runs ahead of playback, so this
+    // does not change what is held in memory.
+    let mut slots: Vec<Option<Result<Arc<Pcm>, String>>> = (0..chunk_count).map(|_| None).collect();
     let mut position = (0usize, 0usize); // chunk index, first word within it
     'narrate: loop {
         let (index, from) = position;
@@ -92,50 +97,46 @@ fn run(plan: Plan, engine: Engine, events: Sender<Ev>, commands: Receiver<Cmd>) 
             let _ = events.send(Ev::Finished);
             break;
         }
-        if !await_chunk(&mut slots, index, &commands, &result_rx, &cancel, &events) {
-            break;
+        match await_chunk(&mut slots, index, &commands, &result_rx, &cancel, &events) {
+            Wait::Ready => {}
+            Wait::Stop => break,
+            Wait::Seek(target) => {
+                position = locate(&plan, target, index);
+                continue 'narrate;
+            }
         }
-        let Some(Ok(pcm)) = slots[index].take() else {
+        let Some(Ok(pcm)) = slots[index].clone() else {
             break; // the only failure path already reported the error
         };
 
         let chunk = &plan.chunks[index];
-        // Hold the chunk's PCM while it plays so pause/resume can restart it
-        // without re-synthesizing; `from` moves when playback resumes.
-        let mut from = from;
-        loop {
-            let audible = pcm.slice_from(plan.offset_bytes(index, from, pcm.data.len()));
-            let file = dir.join(format!("play-{index:04}.wav"));
-            if let Err(err) = wav::write_file(&file, &audible) {
-                let _ = events.send(Ev::Error(format!("cannot write audio: {err}")));
-                break 'narrate;
-            }
-            let _ = events.send(Ev::Sentence {
-                start: chunk.words.start,
-                end: chunk.words.end,
-            });
+        let audible = pcm.slice_from(plan.offset_bytes(index, from, pcm.data.len()));
+        let file = dir.join(format!("play-{index:04}.wav"));
+        if let Err(err) = wav::write_file(&file, &audible) {
+            let _ = events.send(Ev::Error(format!("cannot write audio: {err}")));
+            break 'narrate;
+        }
+        let _ = events.send(Ev::Sentence {
+            start: chunk.words.start,
+            end: chunk.words.end,
+        });
 
-            match play(
-                &plan,
-                index,
-                from,
-                &file,
-                audible.duration_secs(),
-                &events,
-                &commands,
-            ) {
-                Outcome::Played => {
-                    position = (index + 1, 0);
-                    continue 'narrate;
-                }
-                Outcome::Stopped => break 'narrate,
-                Outcome::Paused(word) => {
-                    if !wait_for_resume(&commands) {
-                        break 'narrate;
-                    }
-                    from = word.saturating_sub(chunk.words.start);
-                }
-            }
+        match play(
+            &plan,
+            index,
+            from,
+            &file,
+            audible.duration_secs(),
+            &events,
+            &commands,
+        ) {
+            Outcome::Played => position = (index + 1, 0),
+            Outcome::Stopped => break 'narrate,
+            Outcome::Seek(target) => position = locate(&plan, target, index),
+            Outcome::Paused(word) => match wait_for_resume(&commands, word, &events) {
+                Resumed::Stop => break 'narrate,
+                Resumed::Resume(target) => position = locate(&plan, target, index),
+            },
         }
     }
 
@@ -143,27 +144,42 @@ fn run(plan: Plan, engine: Engine, events: Sender<Ev>, commands: Receiver<Cmd>) 
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Where a spoken word index sits in the plan, keeping the chunk that is
+/// already loaded if the index is somehow out of range.
+fn locate(plan: &Plan, word: usize, loaded: usize) -> (usize, usize) {
+    plan.locate(word).unwrap_or((loaded, 0))
+}
+
+/// Outcome of waiting for a chunk to be synthesized.
+enum Wait {
+    Ready,
+    Seek(usize),
+    Stop,
+}
+
 /// Wait until chunk `index` has been synthesized, buffering results for other
-/// chunks. Returns false when narration must stop.
+/// chunks. A seek while waiting (the viewer can skip during synthesis, which
+/// is slow on Gemini) ends the wait at the requested word.
 fn await_chunk(
-    slots: &mut [Option<Result<Pcm, String>>],
+    slots: &mut [Option<Result<Arc<Pcm>, String>>],
     index: usize,
     commands: &Receiver<Cmd>,
-    results: &Receiver<(usize, Result<Pcm, String>)>,
+    results: &Receiver<(usize, Result<Arc<Pcm>, String>)>,
     cancel: &AtomicBool,
     events: &Sender<Ev>,
-) -> bool {
+) -> Wait {
     loop {
         if let Some(Err(err)) = &slots[index] {
             let _ = events.send(Ev::Error(err.clone()));
-            return false;
+            return Wait::Stop;
         }
         if slots[index].is_some() {
-            return true;
+            return Wait::Ready;
         }
         match commands.try_recv() {
-            Ok(Cmd::Stop) => return false,
-            Err(TryRecvError::Disconnected) => return false,
+            Ok(Cmd::Stop) => return Wait::Stop,
+            Ok(Cmd::Seek(target)) => return Wait::Seek(target),
+            Err(TryRecvError::Disconnected) => return Wait::Stop,
             _ => {}
         }
         match results.recv_timeout(POLL) {
@@ -173,19 +189,33 @@ fn await_chunk(
                 if !cancel.load(Ordering::Relaxed) {
                     let _ = events.send(Ev::Error("speech synthesis stopped unexpectedly".into()));
                 }
-                return false;
+                return Wait::Stop;
             }
         }
     }
 }
 
-fn wait_for_resume(commands: &Receiver<Cmd>) -> bool {
+/// What to do after a pause.
+enum Resumed {
+    Resume(usize),
+    Stop,
+}
+
+/// Wait while paused. Seeking moves the pointer without resuming, and reports
+/// the new position so the highlight follows; the returned word is where
+/// playback starts again.
+fn wait_for_resume(commands: &Receiver<Cmd>, word: usize, events: &Sender<Ev>) -> Resumed {
+    let mut word = word;
     loop {
         match commands.recv_timeout(Duration::from_millis(200)) {
-            Ok(Cmd::Resume) => return true,
-            Ok(Cmd::Stop) => return false,
+            Ok(Cmd::Resume) => return Resumed::Resume(word),
+            Ok(Cmd::Seek(target)) => {
+                word = target;
+                let _ = events.send(Ev::Paused(word));
+            }
+            Ok(Cmd::Stop) => return Resumed::Stop,
             Ok(Cmd::Pause) | Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => return false,
+            Err(RecvTimeoutError::Disconnected) => return Resumed::Stop,
         }
     }
 }
@@ -193,6 +223,7 @@ fn wait_for_resume(commands: &Receiver<Cmd>) -> bool {
 enum Outcome {
     Played,
     Stopped,
+    Seek(usize),
     Paused(usize),
 }
 
@@ -227,6 +258,10 @@ fn play(
             Ok(Cmd::Stop) => {
                 stop_child(&mut child);
                 return Outcome::Stopped;
+            }
+            Ok(Cmd::Seek(target)) => {
+                stop_child(&mut child);
+                return Outcome::Seek(target);
             }
             Err(TryRecvError::Disconnected) => {
                 stop_child(&mut child);

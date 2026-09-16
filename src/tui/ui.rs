@@ -363,6 +363,7 @@ impl App {
             ("r", "reload file"),
             ("m", "toggle front matter"),
             ("p", "read aloud / pause / resume"),
+            ("] / [", "next / previous sentence"),
             ("s", "stop reading"),
             ("q", "quit"),
         ];
@@ -505,7 +506,7 @@ mod tests {
             .narration_sentence
             .bg
             .expect("sentence has a bg");
-        app.narration.debug_state(vec![0, 1, 2], 0..2, 1);
+        app.narration.debug_state(vec![0, 1, 2], vec![0], 0..2, 1);
 
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
         terminal.draw(|frame| app.draw(frame)).unwrap();

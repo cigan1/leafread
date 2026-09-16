@@ -14,6 +14,8 @@ use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+use ratatui::crossterm::terminal::{enable_raw_mode, is_raw_mode_enabled};
+
 /// Hidden flag that turns the process into the probing child.
 pub const PROBE_FLAG: &str = "--probe-terminal";
 
@@ -24,6 +26,36 @@ const PROBE_TIMEOUT: Duration = Duration::from_millis(600);
 
 /// Safety net: the child must never outlive its parent.
 const PROBE_LIFETIME: Duration = Duration::from_secs(3);
+
+/// How long the capability query's thread gets to finish turning raw mode off.
+const RAW_MODE_SETTLE: Duration = Duration::from_millis(200);
+
+/// Whether the environment names a terminal that implements the kitty graphics
+/// protocol and answers its query silently.
+pub fn kitty_graphics_terminal() -> bool {
+    if std::env::var_os("KITTY_WINDOW_ID").is_some() {
+        return true;
+    }
+    let term = std::env::var("TERM").unwrap_or_default();
+    let term_program = std::env::var("TERM_PROGRAM").unwrap_or_default();
+    names_kitty_graphics(&term, &term_program)
+}
+
+fn names_kitty_graphics(term: &str, term_program: &str) -> bool {
+    matches!(term, "xterm-kitty" | "xterm-ghostty") || term_program == "ghostty"
+}
+
+/// The capability query runs on a crate thread that turns raw mode off when it
+/// is done. Wait for that to land, then turn raw mode on for the viewer: a
+/// thread that disables it after the viewer started leaves the terminal
+/// reading line-buffered input, where keys only arrive on Enter.
+pub fn reclaim_raw_mode() {
+    let deadline = Instant::now() + RAW_MODE_SETTLE;
+    while is_raw_mode_enabled().unwrap_or(false) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let _ = enable_raw_mode();
+}
 
 /// Ask the terminal for a device status report (`CSI 5 n`) and report whether
 /// it answered. Only a terminal that answers may be queried for its graphics
@@ -168,5 +200,16 @@ mod tests {
         assert!(!status_report(b"\x1b["));
         assert!(!status_report(b"\x1b[n"));
         assert!(!status_report(b"\x1b[1;1R"));
+    }
+
+    #[test]
+    fn only_terminals_that_answer_the_kitty_query_silently_are_named() {
+        assert!(names_kitty_graphics("xterm-kitty", ""));
+        assert!(names_kitty_graphics("xterm-ghostty", ""));
+        assert!(names_kitty_graphics("", "ghostty"));
+        assert!(!names_kitty_graphics("xterm-256color", "iTerm.app"));
+        assert!(!names_kitty_graphics("tmux-256color", "tmux"));
+        assert!(!names_kitty_graphics("xterm-256color", "WezTerm"));
+        assert!(!names_kitty_graphics("screen-256color", ""));
     }
 }
