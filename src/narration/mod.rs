@@ -498,6 +498,7 @@ mod tests {
         marks.words
     }
 
+    #[cfg(target_os = "macos")]
     fn wait_for_state(narration: &mut Narration, predicate: impl Fn(State) -> bool) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         while std::time::Instant::now() < deadline {
