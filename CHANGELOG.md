@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-16
+
 ### Added
 
 - Read aloud (`p`, `s`, `--read`): speaks the document with the word being
@@ -71,5 +73,6 @@ Initial release.
 - Themes: `dark`, `light`, `mono`; `NO_COLOR` respected.
 - YAML front matter parsing (hidden by default; `--front-matter` to show).
 
-[Unreleased]: https://github.com/cigan1/leafread/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/cigan1/leafread/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/cigan1/leafread/releases/tag/v0.2.0
 [0.1.0]: https://github.com/cigan1/leafread/releases/tag/v0.1.0
